@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<!--
+================================================================================
+NYC SUBWAY REAL-TIME ARRIVAL DISPLAY
+103 St Station (Central Park West) - B & C Trains
+================================================================================
+
+SETUP INSTRUCTIONS:
+1. Host this file on a web server (local or remote) OR use a CORS proxy
+2. Open in a fullscreen/kiosk browser on your tablet
+
+IMPORTANT NOTES:
+- The MTA API is now open access (no API key required!)
+- Due to CORS, this MUST be served from a web server or use a CORS proxy.
+  It will NOT work opened directly as a local file.
+- For tablet kiosk mode, use browser settings like:
+  - Chrome: --kiosk --disable-pinch --overscroll-history-navigation=0
+  - Firefox: about:config -> full-screen-api.allow-trusted-requests-only = false
+
+CORS PROXY OPTIONS (if needed):
+- Deploy your own proxy (recommended for production)
+- Or modify the CORS_PROXY constant below to use a public proxy
+
+STATION INFORMATION:
+- Station: 103 St (IND Eighth Avenue Line / Central Park West)
+- GTFS Stop ID: A18
+- Services: B (weekdays), C (all times except late nights), A (late nights only)
+- This display shows B and C trains only
+
+================================================================================
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1024, height=600, initial-scale=1.0, user-scalable=no">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>103 St - Real-Time Arrivals</title>
+    
+    <!-- Prevent sleep/screen dimming hints for tablets -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    
+    <style>
+        /*
+         * ============================================
+         * NYC SUBWAY TYPOGRAPHY & BASE STYLES
+         * ============================================
+         * Inspired by the classic Helvetica-based 
+         * NYC subway signage system designed by 
+         * Massimo Vignelli and Bob Noorda (1970)
+         */
+        
+        @import url('https://fonts.googleapis.com/css2?family=Helvetica+Neue:wght@400;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            width: 1024px;
+            height: 600px;
+            overflow: hidden;
+            background: #000000;
+            color: #FFFFFF;
+            /* Helvetica Neue is closest to the subway's Helvetica
+               Fall back to system fonts that are similar */
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        /*
+         * ============================================
+         * LAYOUT STRUCTURE
+         * ============================================
+         */
+        
+        .container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            padding: 20px 30px;
+        }
+        
+        /* Station Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #FFFFFF;
+            margin-bottom: 20px;
+        }
+        
+        .station-name {
+            font-size: 52px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            text-transform: uppercase;
+        }
+        
+        .service-badges {
+            display: flex;
+            gap: 12px;
+        }
+        
+        /* Train line badges - classic bullet style */
+        .badge {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            font-weight: 700;
+            color: #FFFFFF;
+        }
+        
+        /* Official MTA line colors */
+        .badge-B {
+            background-color: #FF6319; /* IND Sixth Avenue Line Orange */
+        }
+        
+        .badge-C {
+            background-color: #0039A6; /* IND Eighth Avenue Line Blue */
+        }
+        
+        /*
+         * ============================================
+         * MAIN ARRIVALS DISPLAY
+         * ============================================
+         */
+        
+        .arrivals-container {
+            flex: 1;
+            display: flex;
+            gap: 40px;
+        }
+        
+        .direction-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .direction-header {
+            font-size: 28px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            padding: 12px 0;
+            border-bottom: 2px solid #444444;
+            margin-bottom: 15px;
+        }
+        
+        .direction-header .arrow {
+            font-size: 24px;
+            margin-right: 10px;
+        }
+        
+        .trains-list {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        /*
+         * ============================================
+         * INDIVIDUAL TRAIN ARRIVAL ROW
+         * ============================================
+         */
+        
+        .train-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 4px;
+            transition: opacity 0.3s ease;
+        }
+        
+        .train-row.arriving {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        
+        .train-badge {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: 700;
+            color: #FFFFFF;
+            flex-shrink: 0;
+        }
+        
+        .train-info {
+            flex: 1;
+            margin-left: 18px;
+        }
+        
+        .train-destination {
+            font-size: 22px;
+            font-weight: 400;
+            color: #CCCCCC;
+            margin-bottom: 2px;
+        }
+        
+        .train-time {
+            font-size: 44px;
+            font-weight: 700;
+            letter-spacing: -1px;
+        }
+        
+        .train-time.arriving-now {
+            color: #00FF00;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        .train-time .unit {
+            font-size: 28px;
+            font-weight: 400;
+            margin-left: 4px;
+            color: #AAAAAA;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        /* Empty slot placeholder */
+        .train-row.empty {
+            opacity: 0.3;
+        }
+        
+        .train-row.empty .train-badge {
+            background: #333333;
+        }
+        
+        .no-service {
+            color: #666666;
+            font-size: 20px;
+            font-style: italic;
+        }
+        
+        /*
+         * ============================================
+         * FOOTER / STATUS BAR
+         * ============================================
+         */
+        
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 15px;
+            border-top: 1px solid #333333;
+            margin-top: 15px;
+        }
+        
+        .status {
+            font-size: 14px;
+            color: #666666;
+        }
+        
+        .status.error {
+            color: #FF4444;
+        }
+        
+        .status.loading {
+            color: #FFAA00;
+        }
+        
+        .status .indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+            background: #00AA00;
+        }
+        
+        .status.error .indicator {
+            background: #FF4444;
+        }
+        
+        .status.loading .indicator {
+            background: #FFAA00;
+            animation: blink 1s ease-in-out infinite;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        
+        .clock {
+            font-size: 18px;
+            font-weight: 400;
+            color: #AAAAAA;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        /*
+         * ============================================
+         * ERROR / LOADING STATES
+         * ============================================
+         */
+        
+        .error-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            display: none;
+        }
+        
+        .error-overlay.visible {
+            display: flex;
+        }
+        
+        .error-message {
+            font-size: 28px;
+            color: #FF6666;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .error-detail {
+            font-size: 16px;
+            color: #888888;
+            text-align: center;
+        }
+        
+        .retry-indicator {
+            margin-top: 30px;
+            font-size: 14px;
+            color: #666666;
+        }
+        
+        /*
+         * ============================================
+         * DIVIDER BETWEEN DIRECTIONS
+         * ============================================
+         */
+        
+        .divider {
+            width: 2px;
+            background: linear-gradient(
+                to bottom,
+                transparent 0%,
+                #333333 10%,
+                #333333 90%,
+                transparent 100%
+            );
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header with station name and service badges -->
+        <header class="header">
+            <h1 class="station-name">103 St</h1>
+            <div class="service-badges">
+                <div class="badge badge-B">B</div>
+                <div class="badge badge-C">C</div>
+            </div>
+        </header>
+        
+        <!-- Main arrivals display -->
+        <main class="arrivals-container">
+            <!-- Uptown Column -->
+            <section class="direction-column" id="uptown">
+                <h2 class="direction-header">
+                    <span class="arrow">↑</span>Uptown
+                </h2>
+                <div class="trains-list" id="uptown-trains">
+                    <!-- Train rows populated by JavaScript -->
+                </div>
+            </section>
+            
+            <!-- Visual divider -->
+            <div class="divider"></div>
+            
+            <!-- Downtown Column -->
+            <section class="direction-column" id="downtown">
+                <h2 class="direction-header">
+                    <span class="arrow">↓</span>Downtown
+                </h2>
+                <div class="trains-list" id="downtown-trains">
+                    <!-- Train rows populated by JavaScript -->
+                </div>
+            </section>
+        </main>
+        
+        <!-- Footer with status and clock -->
+        <footer class="footer">
+            <div class="status" id="status">
+                <span class="indicator"></span>
+                <span class="text">Initializing...</span>
+            </div>
+            <div class="clock" id="clock">--:--:--</div>
+        </footer>
+    </div>
+    
+    <!-- Error overlay for critical failures -->
+    <div class="error-overlay" id="error-overlay">
+        <div class="error-message">Data temporarily unavailable</div>
+        <div class="error-detail">Please check your connection</div>
+        <div class="retry-indicator">Retrying automatically...</div>
+    </div>
+
+    <!-- 
+        ================================================================
+        PROTOBUF DECODER
+        ================================================================
+        Since we need to parse GTFS-Realtime protobuf data in the browser
+        without dependencies, we include a minimal protobuf decoder.
+        This is a simplified decoder specifically for GTFS-RT FeedMessage.
+    -->
+    <script>
+        /**
+         * ================================================================
+         * CONFIGURATION
+         * ================================================================
+         */
+        const CONFIG = {
+            // MTA GTFS-Realtime feed URLs (no API key required)
+            FEEDS: {
+                // ACE feed includes C train data
+                ACE: 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace',
+                // BDFM feed includes B train data
+                BDFM: 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm'
+            },
+            
+            // Station configuration
+            // 103 St on the IND 8th Avenue Line (Central Park West)
+            STATION_ID: 'A18',
+            
+            // Which trains to display (B and C at this station)
+            TRAINS: ['B', 'C'],
+            
+            // Refresh interval in milliseconds (60 seconds)
+            REFRESH_INTERVAL: 60000,
+            
+            // Number of trains to show per direction
+            TRAINS_PER_DIRECTION: 2,
+            
+            // Retry configuration for failed requests
+            RETRY_DELAY: 10000,      // Wait 10 seconds before retry
+            MAX_RETRIES: 3,          // Max retries before showing error
+            
+            // If you need a CORS proxy, set it here
+            // Example: 'https://your-cors-proxy.com/?url='
+            // Leave empty string if not needed (direct API access)
+            CORS_PROXY: ''
+        };
+        
+        // Train destinations by direction
+        const DESTINATIONS = {
+            N: {
+                B: '145 St',
+                C: '168 St'
+            },
+            S: {
+                B: 'Brighton Beach',
+                C: 'Euclid Av'
+            }
+        };
+        
+        // Train colors (official MTA colors)
+        const TRAIN_COLORS = {
+            B: '#FF6319',  // Orange (6th Ave)
+            C: '#0039A6', // Blue (8th Ave)
+            A: '#0039A6'  // Blue (8th Ave) - for late night service
+        };
+
+        /**
+         * ================================================================
+         * MINIMAL PROTOBUF DECODER FOR GTFS-RT
+         * ================================================================
+         * This is a purpose-built decoder for GTFS-Realtime FeedMessage.
+         * It handles the specific wire types and message structure we need.
+         */
+        class ProtobufDecoder {
+            constructor(buffer) {
+                this.buffer = new Uint8Array(buffer);
+                this.pos = 0;
+            }
+            
+            // Read a varint (variable-length integer)
+            readVarint() {
+                let result = 0;
+                let shift = 0;
+                let byte;
+                do {
+                    if (this.pos >= this.buffer.length) {
+                        throw new Error('Unexpected end of buffer');
+                    }
+                    byte = this.buffer[this.pos++];
+                    result |= (byte & 0x7F) << shift;
+                    shift += 7;
+                } while (byte >= 0x80);
+                return result >>> 0; // Convert to unsigned
+            }
+            
+            // Read a 64-bit varint (for timestamps)
+            readVarint64() {
+                // For simplicity, we read as two 32-bit parts
+                // JavaScript can handle integers up to 2^53 safely
+                let lo = 0, hi = 0;
+                let shift = 0;
+                let byte;
+                
+                // Read low 32 bits
+                while (shift < 32) {
+                    byte = this.buffer[this.pos++];
+                    lo |= (byte & 0x7F) << shift;
+                    if (byte < 0x80) return lo;
+                    shift += 7;
+                }
+                
+                // Read remaining bits into high part
+                shift = 0;
+                while (shift < 32) {
+                    byte = this.buffer[this.pos++];
+                    hi |= (byte & 0x7F) << shift;
+                    if (byte < 0x80) break;
+                    shift += 7;
+                }
+                
+                // Combine: result = hi * 2^32 + lo
+                return hi * 0x100000000 + lo;
+            }
+            
+            // Read a length-delimited field (string or nested message)
+            readBytes() {
+                const length = this.readVarint();
+                const bytes = this.buffer.slice(this.pos, this.pos + length);
+                this.pos += length;
+                return bytes;
+            }
+            
+            // Read a string
+            readString() {
+                const bytes = this.readBytes();
+                return new TextDecoder().decode(bytes);
+            }
+            
+            // Skip a field based on wire type
+            skipField(wireType) {
+                switch (wireType) {
+                    case 0: // Varint
+                        this.readVarint();
+                        break;
+                    case 1: // 64-bit
+                        this.pos += 8;
+                        break;
+                    case 2: // Length-delimited
+                        const len = this.readVarint();
+                        this.pos += len;
+                        break;
+                    case 5: // 32-bit
+                        this.pos += 4;
+                        break;
+                    default:
+                        throw new Error(`Unknown wire type: ${wireType}`);
+                }
+            }
+            
+            // Parse a GTFS-RT FeedMessage
+            parseFeedMessage() {
+                const message = {
+                    header: null,
+                    entity: []
+                };
+                
+                while (this.pos < this.buffer.length) {
+                    const tag = this.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 1: // header
+                            const headerBytes = this.readBytes();
+                            message.header = this.parseHeader(headerBytes);
+                            break;
+                        case 2: // entity (repeated)
+                            const entityBytes = this.readBytes();
+                            const entity = this.parseEntity(entityBytes);
+                            if (entity) {
+                                message.entity.push(entity);
+                            }
+                            break;
+                        default:
+                            this.skipField(wireType);
+                    }
+                }
+                
+                return message;
+            }
+            
+            // Parse FeedHeader
+            parseHeader(bytes) {
+                const decoder = new ProtobufDecoder(bytes);
+                const header = {};
+                
+                while (decoder.pos < bytes.length) {
+                    const tag = decoder.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 1: // gtfs_realtime_version
+                            header.gtfsRealtimeVersion = decoder.readString();
+                            break;
+                        case 3: // timestamp
+                            header.timestamp = decoder.readVarint64();
+                            break;
+                        default:
+                            decoder.skipField(wireType);
+                    }
+                }
+                
+                return header;
+            }
+            
+            // Parse FeedEntity
+            parseEntity(bytes) {
+                const decoder = new ProtobufDecoder(bytes);
+                const entity = { id: null, tripUpdate: null };
+                
+                while (decoder.pos < bytes.length) {
+                    const tag = decoder.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 1: // id
+                            entity.id = decoder.readString();
+                            break;
+                        case 3: // trip_update
+                            const tripBytes = decoder.readBytes();
+                            entity.tripUpdate = this.parseTripUpdate(tripBytes);
+                            break;
+                        default:
+                            decoder.skipField(wireType);
+                    }
+                }
+                
+                return entity.tripUpdate ? entity : null;
+            }
+            
+            // Parse TripUpdate
+            parseTripUpdate(bytes) {
+                const decoder = new ProtobufDecoder(bytes);
+                const tripUpdate = {
+                    trip: null,
+                    stopTimeUpdate: []
+                };
+                
+                while (decoder.pos < bytes.length) {
+                    const tag = decoder.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 1: // trip
+                            const tripBytes = decoder.readBytes();
+                            tripUpdate.trip = this.parseTripDescriptor(tripBytes);
+                            break;
+                        case 2: // stop_time_update (repeated)
+                            const stuBytes = decoder.readBytes();
+                            const stu = this.parseStopTimeUpdate(stuBytes);
+                            if (stu) {
+                                tripUpdate.stopTimeUpdate.push(stu);
+                            }
+                            break;
+                        default:
+                            decoder.skipField(wireType);
+                    }
+                }
+                
+                return tripUpdate;
+            }
+            
+            // Parse TripDescriptor
+            parseTripDescriptor(bytes) {
+                const decoder = new ProtobufDecoder(bytes);
+                const trip = {
+                    tripId: null,
+                    routeId: null,
+                    directionId: null
+                };
+                
+                while (decoder.pos < bytes.length) {
+                    const tag = decoder.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 1: // trip_id
+                            trip.tripId = decoder.readString();
+                            break;
+                        case 5: // route_id
+                            trip.routeId = decoder.readString();
+                            break;
+                        case 6: // direction_id
+                            trip.directionId = decoder.readVarint();
+                            break;
+                        default:
+                            decoder.skipField(wireType);
+                    }
+                }
+                
+                return trip;
+            }
+            
+            // Parse StopTimeUpdate
+            parseStopTimeUpdate(bytes) {
+                const decoder = new ProtobufDecoder(bytes);
+                const stu = {
+                    stopSequence: null,
+                    stopId: null,
+                    arrival: null,
+                    departure: null,
+                    scheduleRelationship: 0
+                };
+                
+                while (decoder.pos < bytes.length) {
+                    const tag = decoder.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 1: // stop_sequence
+                            stu.stopSequence = decoder.readVarint();
+                            break;
+                        case 4: // stop_id
+                            stu.stopId = decoder.readString();
+                            break;
+                        case 2: // arrival
+                            const arrBytes = decoder.readBytes();
+                            stu.arrival = this.parseStopTimeEvent(arrBytes);
+                            break;
+                        case 3: // departure
+                            const depBytes = decoder.readBytes();
+                            stu.departure = this.parseStopTimeEvent(depBytes);
+                            break;
+                        case 5: // schedule_relationship
+                            stu.scheduleRelationship = decoder.readVarint();
+                            break;
+                        default:
+                            decoder.skipField(wireType);
+                    }
+                }
+                
+                return stu;
+            }
+            
+            // Parse StopTimeEvent
+            parseStopTimeEvent(bytes) {
+                const decoder = new ProtobufDecoder(bytes);
+                const event = { time: null };
+                
+                while (decoder.pos < bytes.length) {
+                    const tag = decoder.readVarint();
+                    const fieldNumber = tag >>> 3;
+                    const wireType = tag & 0x7;
+                    
+                    switch (fieldNumber) {
+                        case 2: // time (int64)
+                            event.time = decoder.readVarint64();
+                            break;
+                        default:
+                            decoder.skipField(wireType);
+                    }
+                }
+                
+                return event;
+            }
+        }
+
+        /**
+         * ================================================================
+         * APPLICATION STATE
+         * ================================================================
+         */
+        const state = {
+            arrivals: {
+                uptown: [],
+                downtown: []
+            },
+            lastUpdate: null,
+            error: null,
+            retryCount: 0,
+            isLoading: false
+        };
+
+        /**
+         * ================================================================
+         * DATA FETCHING
+         * ================================================================
+         */
+        
+        /**
+         * Fetch and parse a single GTFS-RT feed
+         */
+        async function fetchFeed(url) {
+            const fetchUrl = CONFIG.CORS_PROXY ? CONFIG.CORS_PROXY + encodeURIComponent(url) : url;
+            
+            const response = await fetch(fetchUrl);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const buffer = await response.arrayBuffer();
+            const decoder = new ProtobufDecoder(buffer);
+            return decoder.parseFeedMessage();
+        }
+        
+        /**
+         * Extract arrivals for our station from feed data
+         */
+        function extractArrivals(feed, targetTrains) {
+            const arrivals = [];
+            const now = Math.floor(Date.now() / 1000);
+            
+            for (const entity of feed.entity) {
+                if (!entity.tripUpdate || !entity.tripUpdate.trip) continue;
+                
+                const trip = entity.tripUpdate.trip;
+                const routeId = trip.routeId;
+                
+                // Filter for our target trains
+                if (!targetTrains.includes(routeId)) continue;
+                
+                // Find stop time updates for our station
+                for (const stu of entity.tripUpdate.stopTimeUpdate) {
+                    // Check if this is our station
+                    // Stop IDs include direction suffix: A18N (north) or A18S (south)
+                    if (!stu.stopId || !stu.stopId.startsWith(CONFIG.STATION_ID)) continue;
+                    
+                    // Skip if schedule_relationship indicates SKIPPED (1) or NO_DATA (2)
+                    if (stu.scheduleRelationship === 1 || stu.scheduleRelationship === 2) continue;
+                    
+                    // Get arrival time
+                    const arrivalTime = stu.arrival?.time || stu.departure?.time;
+                    if (!arrivalTime) continue;
+                    
+                    // Skip past arrivals (allow 30 second buffer)
+                    if (arrivalTime < now - 30) continue;
+                    
+                    // Determine direction from stop ID suffix
+                    const direction = stu.stopId.endsWith('N') ? 'N' : 'S';
+                    
+                    arrivals.push({
+                        routeId: routeId,
+                        direction: direction,
+                        arrivalTime: arrivalTime,
+                        stopId: stu.stopId,
+                        tripId: trip.tripId
+                    });
+                }
+            }
+            
+            return arrivals;
+        }
+        
+        /**
+         * Fetch all feeds and combine arrivals
+         */
+        async function fetchAllArrivals() {
+            state.isLoading = true;
+            updateStatus('loading', 'Fetching data...');
+            
+            try {
+                // Fetch both feeds in parallel
+                const [aceFeed, bdfmFeed] = await Promise.all([
+                    fetchFeed(CONFIG.FEEDS.ACE),
+                    fetchFeed(CONFIG.FEEDS.BDFM)
+                ]);
+                
+                // Extract arrivals
+                const aceArrivals = extractArrivals(aceFeed, ['C', 'A']); // C train (and A for late nights)
+                const bdfmArrivals = extractArrivals(bdfmFeed, ['B']); // B train
+                
+                // Combine all arrivals
+                const allArrivals = [...aceArrivals, ...bdfmArrivals];
+                
+                // Separate by direction
+                const uptown = allArrivals
+                    .filter(a => a.direction === 'N')
+                    .sort((a, b) => a.arrivalTime - b.arrivalTime)
+                    .slice(0, CONFIG.TRAINS_PER_DIRECTION);
+                    
+                const downtown = allArrivals
+                    .filter(a => a.direction === 'S')
+                    .sort((a, b) => a.arrivalTime - b.arrivalTime)
+                    .slice(0, CONFIG.TRAINS_PER_DIRECTION);
+                
+                // Update state
+                state.arrivals.uptown = uptown;
+                state.arrivals.downtown = downtown;
+                state.lastUpdate = new Date();
+                state.error = null;
+                state.retryCount = 0;
+                
+                // Hide error overlay
+                document.getElementById('error-overlay').classList.remove('visible');
+                
+                updateStatus('ok', `Updated ${formatTime(state.lastUpdate)}`);
+                
+            } catch (error) {
+                console.error('Fetch error:', error);
+                state.error = error.message;
+                state.retryCount++;
+                
+                if (state.retryCount >= CONFIG.MAX_RETRIES) {
+                    // Show error overlay after max retries
+                    document.getElementById('error-overlay').classList.add('visible');
+                    updateStatus('error', `Error: ${error.message}`);
+                } else {
+                    updateStatus('error', `Retry ${state.retryCount}/${CONFIG.MAX_RETRIES}...`);
+                    // Schedule retry
+                    setTimeout(fetchAllArrivals, CONFIG.RETRY_DELAY);
+                }
+            } finally {
+                state.isLoading = false;
+            }
+        }
+
+        /**
+         * ================================================================
+         * UI RENDERING
+         * ================================================================
+         */
+        
+        /**
+         * Create HTML for a train row
+         */
+        function createTrainRow(arrival, direction) {
+            if (!arrival) {
+                return `
+                    <div class="train-row empty">
+                        <div class="train-badge">-</div>
+                        <div class="train-info">
+                            <div class="train-destination no-service">No trains</div>
+                            <div class="train-time">--</div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            const now = Math.floor(Date.now() / 1000);
+            const minutesAway = Math.max(0, Math.floor((arrival.arrivalTime - now) / 60));
+            const isArriving = minutesAway <= 1;
+            
+            const color = TRAIN_COLORS[arrival.routeId] || '#666666';
+            const destination = DESTINATIONS[direction]?.[arrival.routeId] || 
+                               (direction === 'N' ? 'Uptown' : 'Downtown');
+            
+            const timeDisplay = isArriving 
+                ? '<span class="train-time arriving-now">Arriving</span>'
+                : `<span class="train-time">${minutesAway}<span class="unit">min</span></span>`;
+            
+            return `
+                <div class="train-row ${isArriving ? 'arriving' : ''}">
+                    <div class="train-badge" style="background-color: ${color}">
+                        ${arrival.routeId}
+                    </div>
+                    <div class="train-info">
+                        <div class="train-destination">${destination}</div>
+                        ${timeDisplay}
+                    </div>
+                </div>
+            `;
+        }
+        
+        /**
+         * Render the arrivals display
+         */
+        function renderArrivals() {
+            const uptownContainer = document.getElementById('uptown-trains');
+            const downtownContainer = document.getElementById('downtown-trains');
+            
+            // Render uptown trains
+            let uptownHTML = '';
+            for (let i = 0; i < CONFIG.TRAINS_PER_DIRECTION; i++) {
+                uptownHTML += createTrainRow(state.arrivals.uptown[i], 'N');
+            }
+            uptownContainer.innerHTML = uptownHTML;
+            
+            // Render downtown trains
+            let downtownHTML = '';
+            for (let i = 0; i < CONFIG.TRAINS_PER_DIRECTION; i++) {
+                downtownHTML += createTrainRow(state.arrivals.downtown[i], 'S');
+            }
+            downtownContainer.innerHTML = downtownHTML;
+        }
+        
+        /**
+         * Update status indicator
+         */
+        function updateStatus(type, message) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status ${type}`;
+            statusEl.querySelector('.text').textContent = message;
+        }
+        
+        /**
+         * Update clock display
+         */
+        function updateClock() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            });
+            document.getElementById('clock').textContent = timeStr;
+        }
+        
+        /**
+         * Format time for display
+         */
+        function formatTime(date) {
+            return date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
+            });
+        }
+
+        /**
+         * ================================================================
+         * MAIN APPLICATION LOOP
+         * ================================================================
+         */
+        
+        // Track intervals for cleanup (memory leak prevention)
+        let refreshInterval = null;
+        let clockInterval = null;
+        let renderInterval = null;
+        
+        /**
+         * Initialize the application
+         */
+        async function init() {
+            console.log('Subway Display Initializing...');
+            console.log('Station:', CONFIG.STATION_ID);
+            console.log('Trains:', CONFIG.TRAINS.join(', '));
+            
+            // Start clock
+            updateClock();
+            clockInterval = setInterval(updateClock, 1000);
+            
+            // Initial data fetch
+            await fetchAllArrivals();
+            renderArrivals();
+            
+            // Set up refresh interval (every 60 seconds)
+            refreshInterval = setInterval(async () => {
+                await fetchAllArrivals();
+                renderArrivals();
+            }, CONFIG.REFRESH_INTERVAL);
+            
+            // Update displayed times every 10 seconds (without re-fetching)
+            // This keeps the "X min" display accurate between API refreshes
+            renderInterval = setInterval(renderArrivals, 10000);
+            
+            console.log('Subway Display Ready');
+        }
+        
+        /**
+         * Clean up intervals (for potential hot-reload scenarios)
+         */
+        function cleanup() {
+            if (refreshInterval) clearInterval(refreshInterval);
+            if (clockInterval) clearInterval(clockInterval);
+            if (renderInterval) clearInterval(renderInterval);
+        }
+        
+        // Handle page unload
+        window.addEventListener('beforeunload', cleanup);
+        
+        // Handle visibility changes (pause when hidden, refresh when visible)
+        document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState === 'visible') {
+                // Page became visible - refresh data immediately
+                await fetchAllArrivals();
+                renderArrivals();
+            }
+        });
+        
+        // Start the application
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
